@@ -1,0 +1,447 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sales Dashboard - Monitoring Window</title>
+<style>
+  :root {
+    --bg:#0e1015; --panel:#161922; --panel2:#1c2030; --line:#2a2f42; --fg:#e6e8ef;
+    --muted:#8a90a6; --accent:#35d0a5; --blue:#5aa2ff; --amber:#ffb454; --red:#ff6b7a; --violet:#b48cff;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.45 system-ui,-apple-system,Segoe UI,sans-serif; }
+  header { position:sticky; top:0; z-index:20; background:var(--panel); border-bottom:1px solid var(--line); padding:10px 18px; display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  header h1 { font-size:15px; margin:0 6px 0 0; }
+  .pill { padding:3px 10px; border-radius:999px; border:1px solid var(--line); font-size:12px; background:var(--panel2); }
+  .pill.ok { color:var(--accent); border-color:#245a4b; }
+  .pill.warn { color:var(--amber); border-color:#6a4d1c; }
+  .pill.bad { color:var(--red); border-color:#6a2530; }
+  .spacer { flex:1; }
+  select, input[type=text], button { background:var(--panel2); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 9px; font:inherit; }
+  button { cursor:pointer; } button:hover { border-color:var(--accent); }
+  label.chk { display:flex; gap:5px; align-items:center; color:var(--muted); }
+  nav { display:flex; gap:2px; padding:10px 18px 0; border-bottom:1px solid var(--line); overflow-x:auto; }
+  nav button { border:0; border-bottom:2px solid transparent; border-radius:0; background:none; color:var(--muted); padding:8px 14px; }
+  nav button.on { color:var(--fg); border-bottom-color:var(--accent); }
+  main { padding:16px 18px 60px; }
+  section { display:none; } section.on { display:block; }
+  .banner { margin:12px 18px 0; padding:10px 14px; border-radius:8px; border:1px solid; }
+  .banner.warn { background:#2a2113; border-color:#6a4d1c; color:var(--amber); }
+  .banner.bad { background:#2a1319; border-color:#6a2530; color:var(--red); }
+  .banner code { background:#0003; padding:1px 5px; border-radius:4px; user-select:all; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:16px; }
+  .kpi { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:11px 13px; }
+  .kpi b { display:block; font-size:22px; color:var(--accent); } .kpi span { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+  .kpi small { display:block; color:var(--muted); margin-top:2px; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px; overflow:auto; }
+  .card h3 { margin:0 0 9px; font-size:13px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; color:var(--muted); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.05em; padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap; position:sticky; top:0; background:var(--panel); }
+  td { padding:5px 8px; border-bottom:1px solid #20243200; border-bottom:1px solid #232739; vertical-align:top; }
+  tr.click { cursor:pointer; } tr.click:hover td { background:var(--panel2); }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .muted { color:var(--muted); } .mono { font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  .tag { display:inline-block; padding:0 7px; border-radius:4px; font-size:11px; border:1px solid var(--line); }
+  .tag.user_action { color:var(--blue); } .tag.api { color:var(--violet); } .tag.error { color:var(--red); border-color:#6a2530; } .tag.session { color:var(--accent); }
+  .ok { color:var(--accent); } .fail { color:var(--red); font-weight:600; }
+  .bar { height:8px; background:var(--blue); border-radius:4px; min-width:2px; }
+  .bar.g { background:var(--accent); } .bar.r { background:var(--red); } .bar.a { background:var(--amber); }
+  .barrow { display:grid; grid-template-columns:150px 1fr 56px; gap:8px; align-items:center; margin:3px 0; }
+  .barrow .l { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .barrow .v { text-align:right; font-variant-numeric:tabular-nums; }
+  .hours { display:grid; grid-template-columns:repeat(24,1fr); gap:3px; align-items:end; height:90px; }
+  .hours div { background:var(--blue); border-radius:3px 3px 0 0; min-height:2px; position:relative; }
+  .hlab { display:grid; grid-template-columns:repeat(24,1fr); gap:3px; color:var(--muted); font-size:10px; text-align:center; margin-top:3px; }
+  .funnel .step { display:grid; grid-template-columns:170px 1fr 120px; gap:10px; align-items:center; margin:6px 0; }
+  .empty { color:var(--muted); padding:18px; text-align:center; }
+  @keyframes flash { from { background:#35d0a533; } to { background:transparent; } }
+  tr.new td { animation:flash 3.5s ease-out; }
+  #drawer { position:fixed; top:0; right:0; bottom:0; width:min(760px,96vw); background:var(--panel); border-left:1px solid var(--line); box-shadow:-12px 0 30px #0008; transform:translateX(105%); transition:transform .18s; z-index:30; display:flex; flex-direction:column; }
+  #drawer.open { transform:none; }
+  #drawer .dh { padding:12px 16px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:center; }
+  #drawer .db { padding:10px 16px; overflow:auto; flex:1; }
+  .live-top { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:10px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--accent); display:inline-block; box-shadow:0 0 0 0 #35d0a5aa; animation:pulse 1.6s infinite; }
+  .dot.off { background:var(--muted); animation:none; }
+  @keyframes pulse { 70% { box-shadow:0 0 0 8px #35d0a500; } 100% { box-shadow:0 0 0 0 #35d0a500; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sales Dashboard - Monitoring Window</h1>
+  <span id="health" class="pill">connecting...</span>
+  <span id="active" class="pill">active now: -</span>
+  <span class="spacer"></span>
+  <label class="muted">Range
+    <select id="range">
+      <option value="1h">Last hour</option><option value="6h">Last 6 hours</option>
+      <option value="24h">Last 24 hours</option><option value="7d" selected>Last 7 days</option>
+      <option value="30d">Last 30 days</option><option value="all">All time</option>
+    </select>
+  </label>
+  <label class="muted">User <select id="userf"><option value="">All users</option></select></label>
+  <label class="chk"><input type="checkbox" id="auto" checked> auto-refresh 30s</label>
+  <button id="reload">Reload</button>
+</header>
+<div id="banners"></div>
+<nav id="tabs"></nav>
+<main>
+  <section id="t-live"></section><section id="t-overview"></section><section id="t-users"></section>
+  <section id="t-sessions"></section><section id="t-bookings"></section><section id="t-customers"></section>
+  <section id="t-instructors"></section><section id="t-api"></section><section id="t-errors"></section>
+</main>
+<aside id="drawer"><div class="dh"><b id="dtitle">Session</b><span class="spacer"></span><button id="dclose">Close</button></div><div class="db" id="dbody"></div></aside>
+
+<script>
+"use strict";
+// ------------------------------------------------------------------ helpers
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const nf = (n) => Number(n || 0).toLocaleString();
+const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 + "%" : "-");
+// created can exceed started (a booking may create several classes, or a flow
+// may not pass through "started"), so a rate above 100% is not a conversion.
+const conv = (c, s) => (c > s ? "n/a (more created than started)" : pct(c, s));
+const fmtDur = (ms) => {
+  if (ms == null || !isFinite(ms)) return "-";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "m " + (s % 60) + "s";
+  return Math.floor(m / 60) + "h " + (m % 60) + "m";
+};
+const ago = (ts) => fmtDur(Date.now() - new Date(ts).getTime()) + " ago";
+const tm = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false });
+const dt = (ts) => new Date(ts).toLocaleString([], { hour12: false, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const quantile = (sorted, q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : null);
+const inc = (m, k, by = 1) => m.set(k, (m.get(k) || 0) + by);
+const topN = (m, n = 10) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+
+let rows = [];            // analytics window, ascending by ts
+let names = {};           // instructor id -> name
+let health = null;
+let lastSeen = new Map(); // user -> last received_at/ts ms (analytics + live)
+const uname = (r) => r.user_name || r.user_id || (r.auth_user_id ? r.auth_user_id.slice(0, 8) : "") || "(unknown)";
+const iname = (id) => (id ? names[id] || id.slice(0, 8) + "..." : "-");
+
+async function api(path) {
+  const r = await fetch(path);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(j?.error?.message || j?.error || r.statusText), { body: j });
+  return j;
+}
+
+function props(r) { return r.props && typeof r.props === "object" ? r.props : {}; }
+// The app stores the customer name in props.customer_name (no dedicated column).
+const cust = (r) => props(r).customer_name || r.customer_name || "";
+function detail(r) {
+  const p = [];
+  if (r.api_name) p.push(`${r.http_method || ""} ${r.duration_ms != null ? r.duration_ms + "ms" : ""}${r.http_status ? " (" + r.http_status + ")" : ""}`.trim());
+  if (r.instructor_id) p.push("instructor: " + esc(iname(r.instructor_id)));
+  if (r.slot_date) p.push("slot: " + esc(r.slot_date) + (r.slot_start ? " " + esc(String(r.slot_start).slice(0, 5)) + (r.slot_end ? "-" + esc(String(r.slot_end).slice(0, 5)) : "") : ""));
+  if (cust(r)) p.push("customer: " + esc(cust(r)));
+  if (r.error_message) p.push('<span class="fail">' + esc(r.error_message) + "</span>");
+  const kv = Object.entries(props(r)).filter(([k]) => k !== "customer_name").slice(0, 5).map(([k, v]) => esc(k) + "=" + esc(typeof v === "object" ? JSON.stringify(v) : v));
+  if (kv.length) p.push('<span class="muted">' + kv.join(" ") + "</span>");
+  return p.join(" &middot; ") || '<span class="muted">-</span>';
+}
+const result = (r) => (r.success === true ? '<span class="ok">ok</span>' : r.success === false ? '<span class="fail">FAIL</span>' : '<span class="muted">-</span>');
+const tag = (c) => `<span class="tag ${esc(c)}">${esc(c)}</span>`;
+function eventRow(r, cls = "") {
+  return `<tr class="${cls}" title="${esc(JSON.stringify(r, null, 1))}"><td class="mono">${tm(r.ts)}</td><td>${esc(uname(r))}</td><td>${tag(r.category)}</td><td class="mono">${esc(r.event_name)}</td><td>${result(r)}</td><td>${detail(r)}</td></tr>`;
+}
+const eventTable = (list, cls) => `<table><thead><tr><th>Time</th><th>User</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, cls)).join("")}</tbody></table>`;
+function bars(entries, cls = "", fmt = nf) {
+  if (!entries.length) return '<div class="empty">no data</div>';
+  const max = Math.max(...entries.map((e) => e[1]), 1);
+  return entries.map(([l, v]) => `<div class="barrow"><span class="l" title="${esc(l)}">${esc(l)}</span><div><div class="bar ${cls}" style="width:${Math.max(1, (v / max) * 100)}%"></div></div><span class="v">${fmt(v)}</span></div>`).join("");
+}
+const card = (title, body) => `<div class="card"><h3>${esc(title)}</h3>${body}</div>`;
+const kpi = (label, value, sub = "") => `<div class="kpi"><span>${esc(label)}</span><b>${value}</b>${sub ? `<small>${sub}</small>` : ""}</div>`;
+
+// ----------------------------------------------------------------- analysis
+function analyze(list) {
+  const A = { list };
+  A.sessions = new Map(); A.users = new Map(); A.events = new Map(); A.cats = new Map();
+  A.customers = new Map(); A.instr = new Map(); A.apis = new Map(); A.errors = [];
+  A.hour = Array(24).fill(0); A.day = new Map();
+  A.failReasons = new Map(); A.rejects = new Map(); A.created = [];
+  const ev = (n) => list.filter((r) => r.event_name === n);
+  const userOf = (u) => { if (!A.users.has(u)) A.users.set(u, { u, sessions: new Set(), events: 0, active: 0, started: 0, created: 0, cancelled: 0, failed: 0, errors: 0, last: 0 }); return A.users.get(u); };
+  for (const r of list) {
+    const u = uname(r), U = userOf(u), t = new Date(r.ts).getTime();
+    U.sessions.add(r.session_id); U.events++; U.last = Math.max(U.last, t);
+    inc(A.cats, r.category);
+    if (r.category !== "api") inc(A.events, r.event_name);
+    if (r.category === "user_action") { A.hour[new Date(r.ts).getHours()]++; inc(A.day, new Date(r.ts).toLocaleDateString()); }
+    let S = A.sessions.get(r.session_id);
+    if (!S) A.sessions.set(r.session_id, (S = { id: r.session_id, user: u, first: t, last: t, n: 0, errors: 0, created: 0, started: 0, active: null, device: r.device }));
+    S.n++; S.last = Math.max(S.last, t); S.first = Math.min(S.first, t);
+    if (r.category === "error" || r.success === false) { S.errors++; U.errors++; }
+    if (r.event_name === "booking_started") { S.started++; U.started++; }
+    if (r.event_name === "booking_created") { S.created++; U.created++; }
+    if (r.event_name === "booking_cancelled") U.cancelled++;
+    if (r.event_name === "booking_failed" || r.event_name === "booking_validation_failed") U.failed++;
+    if (r.event_name === "dashboard_closed" && props(r).active_ms != null) { S.active = Number(props(r).active_ms); }
+    if (cust(r)) {
+      let C = A.customers.get(cust(r));
+      if (!C) A.customers.set(cust(r), (C = { name: cust(r), events: 0, started: 0, created: 0, cancelled: 0, failed: 0, by: new Set(), last: 0 }));
+      C.events++; C.by.add(u); C.last = Math.max(C.last, t);
+      if (r.event_name === "booking_started") C.started++;
+      if (r.event_name === "booking_created") C.created++;
+      if (r.event_name === "booking_cancelled") C.cancelled++;
+      if (r.event_name === "booking_failed" || r.event_name === "booking_validation_failed") C.failed++;
+    }
+    if (r.instructor_id) {
+      let I = A.instr.get(r.instructor_id);
+      if (!I) A.instr.set(r.instructor_id, (I = { id: r.instructor_id, events: 0, picks: 0, created: 0, added: 0, last: 0 }));
+      I.events++; I.last = Math.max(I.last, t);
+      if (["booking_started", "booking_class_added", "booking_slot_changed"].includes(r.event_name)) I.picks++;
+      if (r.event_name === "booking_created") I.created++;
+      if (r.event_name === "instructor_added") I.added++;
+    }
+    if (r.category === "api" && r.api_name) {
+      let P = A.apis.get(r.api_name);
+      if (!P) A.apis.set(r.api_name, (P = { name: r.api_name, n: 0, fail: 0, d: [], last: 0 }));
+      P.n++; P.last = Math.max(P.last, t);
+      if (r.success === false) P.fail++;
+      if (r.duration_ms != null) P.d.push(r.duration_ms);
+    }
+    if (r.category === "error" || r.success === false) A.errors.push(r);
+    if (r.event_name === "booking_failed" || r.event_name === "booking_validation_failed") inc(A.failReasons, r.error_message || "(no message)");
+    if (r.event_name === "slot_double_clicked" && r.success === false) inc(A.rejects, r.error_message || "(unknown)");
+    if (r.event_name === "booking_created") A.created.push(r);
+  }
+  for (const U of A.users.values()) { U.active = 0; }
+  for (const S of A.sessions.values()) { const U = A.users.get(S.user); if (U && S.active != null) U.active += S.active; }
+  A.n = (name) => ev(name).length;
+  return A;
+}
+
+// ----------------------------------------------------------------- renderers
+function renderOverview(A) {
+  const n = A.list.length;
+  const apiRows = A.list.filter((r) => r.category === "api");
+  const apiFail = apiRows.filter((r) => r.success === false).length;
+  const durs = apiRows.map((r) => r.duration_ms).filter((d) => d != null).sort((a, b) => a - b);
+  const started = A.n("booking_started"), created = A.n("booking_created");
+  const errs = A.cats.get("error") || 0;
+  const days = [...A.day.entries()].slice(-14);
+  const h = Math.max(...A.hour, 1);
+  $("#t-overview").innerHTML = `
+    <div class="kpis">
+      ${kpi("Events", nf(n), `${nf(A.cats.get("user_action"))} actions &middot; ${nf(A.cats.get("api"))} API`)}
+      ${kpi("Users", nf(A.users.size))}
+      ${kpi("Sessions", nf(A.sessions.size), "browser tabs")}
+      ${kpi("Bookings created", nf(created), `${nf(started)} started &middot; ${conv(created, started)} conversion`)}
+      ${kpi("Cancelled / failed", `${nf(A.n("booking_cancelled"))} / ${nf(A.n("booking_failed") + A.n("booking_validation_failed"))}`)}
+      ${kpi("API calls", nf(apiRows.length), `${pct(apiFail, apiRows.length)} failed &middot; p95 ${durs.length ? Math.round(quantile(durs, 0.95)) + "ms" : "-"}`)}
+      ${kpi("Errors", nf(errs), "category = error")}
+      ${kpi("Customers", nf(A.customers.size), "by name")}
+    </div>
+    <div class="grid2">
+      ${card("Activity by hour of day (local)", `<div class="hours">${A.hour.map((v, i) => `<div style="height:${(v / h) * 100}%" title="${i}:00 - ${v} actions"></div>`).join("")}</div><div class="hlab">${A.hour.map((_, i) => `<span>${i % 3 === 0 ? i : ""}</span>`).join("")}</div>`)}
+      ${card("Actions per day", bars(days, "g"))}
+      ${card("Most used features (user actions)", bars(topN(A.events, 15)))}
+      ${card("Event categories", bars([...A.cats.entries()], "a"))}
+    </div>`;
+}
+
+function renderUsers(A) {
+  const list = [...A.users.values()].sort((a, b) => b.last - a.last);
+  $("#t-users").innerHTML = card("Users", list.length ? `<table><thead><tr><th>User</th><th class="num">Sessions</th><th class="num">Events</th><th class="num">Active time</th><th class="num">Started</th><th class="num">Created</th><th class="num">Cancelled</th><th class="num">Failed</th><th class="num">Errors</th><th>Last seen</th></tr></thead><tbody>${list.map((U) => `<tr><td><b>${esc(U.u)}</b></td><td class="num">${U.sessions.size}</td><td class="num">${nf(U.events)}</td><td class="num">${fmtDur(U.active)}</td><td class="num">${U.started}</td><td class="num ok">${U.created}</td><td class="num">${U.cancelled}</td><td class="num ${U.failed ? "fail" : ""}">${U.failed}</td><td class="num ${U.errors ? "fail" : ""}">${U.errors}</td><td>${dt(U.last)} <span class="muted">(${ago(U.last)})</span></td></tr>`).join("")}</tbody></table>` : '<div class="empty">no users in range</div>');
+}
+
+function renderSessions(A) {
+  const list = [...A.sessions.values()].sort((a, b) => b.last - a.last).slice(0, 300);
+  $("#t-sessions").innerHTML = card(`Sessions (newest ${list.length}; click a row for its full timeline)`, list.length ? `<table><thead><tr><th>Started</th><th>User</th><th class="num">Wall</th><th class="num">Active</th><th class="num">Events</th><th class="num">Started</th><th class="num">Created</th><th class="num">Errors</th><th>Device</th></tr></thead><tbody>${list.map((S) => { const d = S.device || {}; return `<tr class="click" data-sid="${esc(S.id)}"><td>${dt(S.first)}</td><td>${esc(S.user)}</td><td class="num">${fmtDur(S.last - S.first)}</td><td class="num">${S.active != null ? fmtDur(S.active) : '<span class="muted">open</span>'}</td><td class="num">${S.n}</td><td class="num">${S.started}</td><td class="num ok">${S.created}</td><td class="num ${S.errors ? "fail" : ""}">${S.errors}</td><td class="muted">${esc([d.browser, d.os, d.screen].filter(Boolean).join(" / "))}</td></tr>`; }).join("")}</tbody></table>` : '<div class="empty">no sessions in range</div>');
+  document.querySelectorAll("#t-sessions tr.click").forEach((tr) => (tr.onclick = () => openSession(tr.dataset.sid)));
+}
+
+function renderBookings(A) {
+  const steps = [["Booking started (slot double-clicked)", A.n("booking_started"), ""], ["Submitted", A.n("booking_submitted"), "a"], ["Created in DB", A.n("booking_created"), "g"]];
+  const max = Math.max(...steps.map((s) => s[1]), 1);
+  const side = [["Cancelled", "booking_cancelled"], ["Failed", "booking_failed"], ["Validation failed", "booking_validation_failed"], ["Classes added (+ Add another)", "booking_class_added"], ["Bulk Add opened", "bulk_add_opened"], ["Change slot started", "booking_change_slot_started"], ["Slot changed", "booking_slot_changed"], ["Class removed", "booking_slot_removed"], ["Override started", "booking_override_started"], ["Tentative deleted", "tentative_deleted"]].map(([l, e]) => [l, A.n(e)]);
+  $("#t-bookings").innerHTML = `
+    <div class="grid2">
+      ${card("Booking funnel", `<div class="funnel">${steps.map(([l, v, c]) => `<div class="step"><span>${esc(l)}</span><div><div class="bar ${c}" style="width:${Math.max(1, (v / max) * 100)}%"></div></div><b>${nf(v)}</b></div>`).join("")}</div><p class="muted">Conversion started &rarr; created: <b>${conv(A.n("booking_created"), A.n("booking_started"))}</b></p>`)}
+      ${card("Booking-flow activity", bars(side, "a"))}
+      ${card("Why bookings fail", bars(topN(A.failReasons, 12), "r"))}
+      ${card("Why a double-clicked slot was rejected", bars(topN(A.rejects, 12), "r"))}
+    </div>
+    ${card("Recent bookings created", A.created.length ? `<table><thead><tr><th>Time</th><th>Sales user</th><th>Customer</th><th>Instructor</th><th>Slot</th></tr></thead><tbody>${[...A.created].reverse().slice(0, 100).map((r) => `<tr><td class="mono">${dt(r.ts)}</td><td>${esc(uname(r))}</td><td>${esc(cust(r) || "-")}</td><td>${esc(iname(r.instructor_id))}</td><td>${esc(r.slot_date || "-")} ${esc(String(r.slot_start || "").slice(0, 5))}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">no bookings created in range</div>')}`;
+}
+
+function renderCustomers(A) {
+  const list = [...A.customers.values()].sort((a, b) => b.created - a.created || b.events - a.events);
+  $("#t-customers").innerHTML = card("Customers (by name; phone and address are never recorded)", list.length ? `<table><thead><tr><th>Customer</th><th class="num">Events</th><th class="num">Started</th><th class="num">Created</th><th class="num">Cancelled</th><th class="num">Failed</th><th>Handled by</th><th>Last seen</th></tr></thead><tbody>${list.map((C) => `<tr><td><b>${esc(C.name)}</b></td><td class="num">${C.events}</td><td class="num">${C.started}</td><td class="num ok">${C.created}</td><td class="num">${C.cancelled}</td><td class="num ${C.failed ? "fail" : ""}">${C.failed}</td><td>${esc([...C.by].join(", "))}</td><td>${dt(C.last)}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">no customer names in range (names appear on booking events once a customer is typed into the booking form)</div>');
+}
+
+function renderInstructors(A) {
+  const list = [...A.instr.values()].sort((a, b) => b.picks - a.picks || b.events - a.events);
+  $("#t-instructors").innerHTML = card("Instructors touched", list.length ? `<table><thead><tr><th>Instructor</th><th class="num">Events</th><th class="num">Slots picked</th><th class="num">Bookings created</th><th class="num">Added to roster</th><th>Last</th></tr></thead><tbody>${list.map((I) => `<tr><td><b>${esc(iname(I.id))}</b> <span class="muted mono">${esc(I.id.slice(0, 8))}</span></td><td class="num">${I.events}</td><td class="num">${I.picks}</td><td class="num ok">${I.created}</td><td class="num">${I.added}</td><td>${dt(I.last)}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">no instructor activity in range</div>');
+}
+
+function renderApi(A) {
+  const list = [...A.apis.values()].map((P) => { const d = [...P.d].sort((a, b) => a - b); return { ...P, avg: d.length ? d.reduce((s, x) => s + x, 0) / d.length : null, p50: quantile(d, 0.5), p95: quantile(d, 0.95), max: d.length ? d[d.length - 1] : null }; }).sort((a, b) => b.n - a.n);
+  const slow = A.list.filter((r) => r.category === "api" && r.duration_ms != null).sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 12);
+  $("#t-api").innerHTML = card("API health (per call)", list.length ? `<table><thead><tr><th>API</th><th class="num">Calls</th><th class="num">Failed</th><th class="num">Avg</th><th class="num">p50</th><th class="num">p95</th><th class="num">Max</th></tr></thead><tbody>${list.map((P) => `<tr><td class="mono">${esc(P.name)}</td><td class="num">${nf(P.n)}</td><td class="num ${P.fail ? "fail" : ""}">${P.fail} <span class="muted">(${pct(P.fail, P.n)})</span></td><td class="num">${P.avg != null ? Math.round(P.avg) + "ms" : "-"}</td><td class="num">${P.p50 != null ? P.p50 + "ms" : "-"}</td><td class="num">${P.p95 != null ? P.p95 + "ms" : "-"}</td><td class="num">${P.max != null ? P.max + "ms" : "-"}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">no API calls in range</div>') +
+    card("Slowest calls", slow.length ? eventTable(slow) : '<div class="empty">none</div>');
+}
+
+function renderErrors(A) {
+  const grouped = new Map();
+  for (const r of A.errors) inc(grouped, `${r.event_name}: ${r.error_message || "(no message)"}`);
+  const list = [...A.errors].reverse().slice(0, 300);
+  $("#t-errors").innerHTML = card("Most frequent failures", bars(topN(grouped, 12), "r")) + card(`Errors and failed actions (newest ${list.length} of ${A.errors.length})`, list.length ? eventTable(list) : '<div class="empty">nothing failed in this range</div>');
+}
+
+// --------------------------------------------------------------------- live
+let liveRows = [], liveCursor = null, livePaused = false, liveNew = 0, liveChecked = null;
+// A row is shown at most once, whatever the server returns. Belt and braces on
+// top of the exact-cursor fix: if a poll ever overlaps the previous one, the
+// repeats are dropped here instead of piling up in the feed.
+const liveSeen = new Set();
+const rowKey = (r) => [r.received_at, r.session_id, r.ts, r.event_name].join("|");
+function noteSeen(r) {
+  const u = uname(r), t = new Date(r.received_at || r.ts).getTime();
+  if (t > (lastSeen.get(u) || 0)) lastSeen.set(u, t);
+}
+function renderActive() {
+  const now = Date.now();
+  const act = [...lastSeen.entries()].filter(([, t]) => now - t < 5 * 60 * 1000).sort((a, b) => b[1] - a[1]);
+  const el = $("#active");
+  el.textContent = act.length ? "active now: " + act.map(([u, t]) => `${u} (${fmtDur(now - t)})`).join(", ") : "active now: nobody (last 5 min)";
+  el.className = "pill " + (act.length ? "ok" : "");
+}
+function liveFiltered() {
+  const u = $("#userf").value, cat = $("#lcat") ? $("#lcat").value : "", q = $("#lq") ? $("#lq").value.toLowerCase() : "";
+  return liveRows.filter((r) => (!u || uname(r) === u) && (!cat || (cat === "noapi" ? r.category !== "api" : r.category === cat)) && (!q || JSON.stringify(r).toLowerCase().includes(q)));
+}
+function renderLiveShell() {
+  $("#t-live").innerHTML = `<div class="live-top"><span class="dot" id="ldot"></span><b id="lstat">live</b>
+    <button id="lpause">Pause</button><button id="lclear">Clear</button>
+    <select id="lcat"><option value="noapi">Actions + errors (hide API)</option><option value="">Everything</option><option value="user_action">User actions only</option><option value="api">API only</option><option value="error">Errors only</option></select>
+    <input type="text" id="lq" placeholder="filter text (event, customer, instructor...)" size="34">
+    <span class="muted" id="lmeta"></span></div><div class="card" id="lbody"></div>`;
+  $("#lpause").onclick = () => { livePaused = !livePaused; $("#lpause").textContent = livePaused ? "Resume" : "Pause"; paintLive(); };
+  $("#lclear").onclick = () => { liveRows = []; paintLive(); };
+  // Wrapped, not `= paintLive`: the browser would pass the Event as paintLive's
+  // first argument (the set of rows to highlight) and the render would throw.
+  $("#lcat").onchange = $("#lq").oninput = () => paintLive();
+}
+function paintLive(newIds = new Set()) {
+  if (!$("#lbody")) return;
+  const list = liveFiltered().slice().reverse().slice(0, 400);
+  $("#lbody").innerHTML = list.length ? `<table><thead><tr><th>Time</th><th>User</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, newIds.has(r) ? "new" : "")).join("")}</tbody></table>` : '<div class="empty">No matching events yet. Use the Sales Dashboard in another tab and they appear here within ~2 seconds.</div>';
+  $("#ldot").className = "dot" + (livePaused ? " off" : "");
+  $("#lstat").textContent = livePaused ? "paused" : "live";
+  $("#lmeta").textContent = `${list.length} shown, ${liveNew} new since this page opened` + (liveChecked ? `, checked ${tm(liveChecked)}` : "");
+}
+async function pollLive() {
+  if (livePaused) return;
+  try {
+    const j = await api("/api/live" + (liveCursor ? "?after=" + encodeURIComponent(liveCursor) : ""));
+    liveChecked = Date.now();
+    const fresh = j.rows || [];
+    if (fresh.length) {
+      const isFirst = !liveCursor;
+      liveCursor = fresh.reduce((m, r) => (r.received_at > m ? r.received_at : m), liveCursor || "");
+      const marks = new Set();
+      for (const r of fresh) {
+        const k = rowKey(r);
+        if (liveSeen.has(k)) continue;
+        liveSeen.add(k);
+        noteSeen(r); liveRows.push(r);
+        if (!isFirst) { marks.add(r); liveNew++; }
+      }
+      if (liveRows.length > 2000) liveRows = liveRows.slice(-2000);
+      paintLive(marks);
+    } else { paintLive(); }
+    renderActive();
+    setHealthAge();
+  } catch (e) { $("#lstat") && ($("#lstat").textContent = "live feed error: " + e.message); }
+}
+
+// ------------------------------------------------------------------- drawer
+function openSession(id) {
+  const list = rows.filter((r) => r.session_id === id);
+  $("#dtitle").textContent = `Session ${id.slice(0, 8)} - ${list.length ? uname(list[0]) : ""} - ${list.length ? dt(list[0].ts) : ""}`;
+  $("#dbody").innerHTML = eventTable(list);
+  $("#drawer").classList.add("open");
+}
+$("#dclose").onclick = () => $("#drawer").classList.remove("open");
+
+// -------------------------------------------------------------------- load
+const TABS = [["live", "Live"], ["overview", "Overview"], ["users", "Users"], ["sessions", "Sessions"], ["bookings", "Bookings"], ["customers", "Customers"], ["instructors", "Instructors"], ["api", "API health"], ["errors", "Errors"]];
+let tab = "live";
+function showTab(t) {
+  tab = t;
+  $("#tabs").innerHTML = TABS.map(([k, l]) => `<button class="${k === t ? "on" : ""}" data-t="${k}">${l}</button>`).join("");
+  document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => showTab(b.dataset.t)));
+  document.querySelectorAll("main section").forEach((s) => s.classList.toggle("on", s.id === "t-" + t));
+}
+function banners() {
+  const b = [];
+  if (health && health.unreachable) {
+    // fetch() itself failed: this is NOT a database problem. Either the local
+    // server is not running, or this file was opened straight from disk.
+    const fromFile = location.protocol === "file:";
+    b.push(`<div class="banner bad"><b>Cannot reach the local monitoring server.</b> ${fromFile ? "You opened the .html file directly, which cannot talk to the server." : "The server is not running (or was stopped)."}<br>
+      Start it by double-clicking <code>start-monitor.cmd</code> in the monitoring-window folder (or run <code>node server.mjs</code> there), then open <a href="http://127.0.0.1:4455/" style="color:inherit"><code>http://127.0.0.1:4455/</code></a>.</div>`);
+  } else if (health && !health.ok) b.push(`<div class="banner bad"><b>Cannot read the logs table.</b> ${esc(health.error?.message || health.error || "")} ${health.hint ? "<br>" + esc(health.hint) : ""}</div>`);
+  $("#banners").innerHTML = b.join("");
+}
+function setHealthAge() {
+  const el = $("#health");
+  if (!health) return;
+  if (!health.ok) { el.textContent = health.unreachable ? "server not running" : "table unreadable"; el.className = "pill bad"; return; }
+  const newest = liveRows.length ? liveRows[liveRows.length - 1].received_at : health.newest?.received_at;
+  const age = newest ? Date.now() - new Date(newest).getTime() : null;
+  el.textContent = `connected - ${nf(health.total)} rows in table - newest ${newest ? ago(newest) : "never"}`;
+  el.className = "pill " + (age == null ? "warn" : age < 15 * 60 * 1000 ? "ok" : "warn");
+}
+function sinceIso() {
+  const v = $("#range").value;
+  if (v === "all") return null;
+  const ms = { "1h": 36e5, "6h": 6 * 36e5, "24h": 24 * 36e5, "7d": 7 * 864e5, "30d": 30 * 864e5 }[v];
+  return new Date(Date.now() - ms).toISOString();
+}
+function renderAll() {
+  const u = $("#userf").value;
+  const A = analyze(u ? rows.filter((r) => uname(r) === u) : rows);
+  renderOverview(A); renderUsers(A); renderSessions(A); renderBookings(A); renderCustomers(A); renderInstructors(A); renderApi(A); renderErrors(A);
+}
+async function load() {
+  try {
+    const since = sinceIso();
+    const [h, r, n] = await Promise.all([api("/api/health"), api("/api/rows" + (since ? "?since=" + encodeURIComponent(since) : "")), api("/api/instructors").catch(() => ({}))]);
+    health = h; names = n;
+    rows = (r.rows || []).slice().sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    rows.forEach(noteSeen);
+    const cur = $("#userf").value;
+    const users = [...new Set(rows.map(uname))].sort();
+    $("#userf").innerHTML = '<option value="">All users</option>' + users.map((u) => `<option ${u === cur ? "selected" : ""}>${esc(u)}</option>`).join("");
+    banners(); setHealthAge(); renderActive(); renderAll();
+    if (r.truncated) $("#banners").insertAdjacentHTML("beforeend", '<div class="banner warn">Row cap reached: analytics cover only the newest rows in this range. Pick a shorter range for exact totals.</div>');
+  } catch (e) {
+    // A TypeError from fetch() means the request never reached a server.
+    health = { ok: false, unreachable: e instanceof TypeError, error: { message: e.message } };
+    banners(); setHealthAge();
+  }
+}
+
+$("#reload").onclick = load;
+$("#range").onchange = load;
+$("#userf").onchange = () => { renderAll(); paintLive(); };
+setInterval(() => { if ($("#auto").checked) load(); }, 30000);
+setInterval(renderActive, 5000);
+showTab("live");
+renderLiveShell();
+load().then(pollLive);
+setInterval(pollLive, 2000);
+</script>
+</body>
+</html>
