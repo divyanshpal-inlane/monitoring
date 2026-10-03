@@ -176,16 +176,21 @@ async function getHealth() {
   };
 }
 
-const HTML_PATH = resolve(HERE, "monitor.html");
+const HTML_PATH = resolve(HERE, "index.html");
 
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${HOST}:${PORT}`);
     if (req.method !== "GET") return send(res, 405, { error: "GET only" });
-    if (url.pathname === "/" || url.pathname === "/monitor.html") {
-      // Re-read each time so edits to monitor.html show up on refresh.
+    if (url.pathname === "/" || url.pathname === "/index.html") {
+      // Re-read each time so edits to index.html show up on refresh.
       return send(res, 200, readFileSync(HTML_PATH, "utf8"), "text/html");
     }
+    // Local mode: no public config, so the page uses this server's /api/* and
+    // the full (unsanitized) data. The committed config.js is for GitHub Pages
+    // only and is deliberately NOT what is served here.
+    if (url.pathname === "/config.js")
+      return send(res, 200, "window.MONITOR_CONFIG = {};", "application/javascript");
     if (url.pathname === "/api/health") return send(res, 200, await getHealth());
     if (url.pathname === "/api/instructors")
       return send(res, 200, await getInstructors());

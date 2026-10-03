@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sales Dashboard - Monitoring Window</title>
+<script src="config.js"></script>
 <style>
   :root {
     --bg:#0e1015; --panel:#161922; --panel2:#1c2030; --line:#2a2f42; --fg:#e6e8ef;
@@ -82,7 +83,7 @@
     </select>
   </label>
   <label class="muted">User <select id="userf"><option value="">All users</option></select></label>
-  <label class="chk"><input type="checkbox" id="auto" checked> auto-refresh 30s</label>
+  <label class="chk"><input type="checkbox" id="auto" checked> auto-refresh</label>
   <button id="reload">Reload</button>
 </header>
 <div id="banners"></div>
@@ -126,7 +127,49 @@ let lastSeen = new Map(); // user -> last received_at/ts ms (analytics + live)
 const uname = (r) => r.user_name || r.user_id || (r.auth_user_id ? r.auth_user_id.slice(0, 8) : "") || "(unknown)";
 const iname = (id) => (id ? names[id] || id.slice(0, 8) + "..." : "-");
 
+// Two data sources, one page:
+//   local  : the page is served by server.mjs, which has the service-role key
+//            and answers /api/* (full data, never leaves this machine).
+//   public : the page is on GitHub Pages. config.js provides the project URL
+//            and the PUBLIC anon key, and the page calls the read-only
+//            monitoring_feed_* database functions (setup.sql), which return
+//            the rows with customer names already removed on the server.
+const CFG = window.MONITOR_CONFIG || {};
+const PUBLIC_MODE = !!(CFG.supabaseUrl && CFG.anonKey);
+const POLL_MS = PUBLIC_MODE ? 5000 : 2000;
+const REFRESH_MS = PUBLIC_MODE ? 60000 : 30000;
+
+async function rpc(fn, args) {
+  const r = await fetch(`${CFG.supabaseUrl}/rest/v1/rpc/${fn}`, {
+    method: "POST",
+    headers: { apikey: CFG.anonKey, Authorization: "Bearer " + CFG.anonKey, "Content-Type": "application/json" },
+    body: JSON.stringify(args || {}),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const notSetUp = j?.code === "PGRST202" || r.status === 404;
+    throw Object.assign(new Error(j?.message || r.statusText), {
+      body: j,
+      notSetUp,
+      hint: notSetUp ? "The monitoring backend is not set up yet: the site owner needs to run setup.sql once in the Supabase SQL editor." : undefined,
+    });
+  }
+  return j;
+}
+
 async function api(path) {
+  if (PUBLIC_MODE) {
+    const u = new URL(path, "http://x");
+    const q = u.searchParams;
+    if (u.pathname === "/api/health") return rpc("monitoring_feed_health");
+    if (u.pathname === "/api/instructors") return rpc("monitoring_feed_instructors");
+    if (u.pathname === "/api/rows") {
+      const rows = await rpc("monitoring_feed_rows", { p_since: q.get("since") || null });
+      return { rows, truncated: rows.length >= 20000 };
+    }
+    if (u.pathname === "/api/live") return { rows: await rpc("monitoring_feed_live", q.get("after") ? { p_after: q.get("after") } : {}) };
+    throw new Error("unknown route " + path);
+  }
   const r = await fetch(path);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(j?.error?.message || j?.error || r.statusText), { body: j });
@@ -276,6 +319,17 @@ function renderBookings(A) {
 
 function renderCustomers(A) {
   const list = [...A.customers.values()].sort((a, b) => b.created - a.created || b.events - a.events);
+  if (PUBLIC_MODE) {
+    // The public feed has customer names removed on the server (setup.sql), so
+    // this tab can only say how much customer-related activity there was.
+    const withCustomer = A.list.filter((r) => props(r).customer_present);
+    const byStaff = new Map();
+    for (const r of withCustomer) inc(byStaff, uname(r));
+    $("#t-customers").innerHTML = card("Customer activity (names are not published on this site)",
+      `<p class="muted">Customer names are removed before the data reaches this page. ${nf(withCustomer.length)} booking event(s) involved a named customer in this range.</p>` +
+      bars(topN(byStaff, 15), "a"));
+    return;
+  }
   $("#t-customers").innerHTML = card("Customers (by name; phone and address are never recorded)", list.length ? `<table><thead><tr><th>Customer</th><th class="num">Events</th><th class="num">Started</th><th class="num">Created</th><th class="num">Cancelled</th><th class="num">Failed</th><th>Handled by</th><th>Last seen</th></tr></thead><tbody>${list.map((C) => `<tr><td><b>${esc(C.name)}</b></td><td class="num">${C.events}</td><td class="num">${C.started}</td><td class="num ok">${C.created}</td><td class="num">${C.cancelled}</td><td class="num ${C.failed ? "fail" : ""}">${C.failed}</td><td>${esc([...C.by].join(", "))}</td><td>${dt(C.last)}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">no customer names in range (names appear on booking events once a customer is typed into the booking form)</div>');
 }
 
@@ -335,7 +389,7 @@ function renderLiveShell() {
 function paintLive(newIds = new Set()) {
   if (!$("#lbody")) return;
   const list = liveFiltered().slice().reverse().slice(0, 400);
-  $("#lbody").innerHTML = list.length ? `<table><thead><tr><th>Time</th><th>User</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, newIds.has(r) ? "new" : "")).join("")}</tbody></table>` : '<div class="empty">No matching events yet. Use the Sales Dashboard in another tab and they appear here within ~2 seconds.</div>';
+  $("#lbody").innerHTML = list.length ? `<table><thead><tr><th>Time</th><th>User</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, newIds.has(r) ? "new" : "")).join("")}</tbody></table>` : '<div class="empty">No matching events yet. Use the Sales Dashboard in another tab and they appear here within a few seconds.</div>';
   $("#ldot").className = "dot" + (livePaused ? " off" : "");
   $("#lstat").textContent = livePaused ? "paused" : "live";
   $("#lmeta").textContent = `${list.length} shown, ${liveNew} new since this page opened` + (liveChecked ? `, checked ${tm(liveChecked)}` : "");
@@ -385,7 +439,9 @@ function showTab(t) {
 }
 function banners() {
   const b = [];
-  if (health && health.unreachable) {
+  if (health && health.unreachable && PUBLIC_MODE) {
+    b.push(`<div class="banner bad"><b>Cannot reach the database.</b> Check your internet connection and reload.</div>`);
+  } else if (health && health.unreachable) {
     // fetch() itself failed: this is NOT a database problem. Either the local
     // server is not running, or this file was opened straight from disk.
     const fromFile = location.protocol === "file:";
@@ -397,7 +453,7 @@ function banners() {
 function setHealthAge() {
   const el = $("#health");
   if (!health) return;
-  if (!health.ok) { el.textContent = health.unreachable ? "server not running" : "table unreadable"; el.className = "pill bad"; return; }
+  if (!health.ok) { el.textContent = health.unreachable ? (PUBLIC_MODE ? "offline" : "server not running") : "table unreadable"; el.className = "pill bad"; return; }
   const newest = liveRows.length ? liveRows[liveRows.length - 1].received_at : health.newest?.received_at;
   const age = newest ? Date.now() - new Date(newest).getTime() : null;
   el.textContent = `connected - ${nf(health.total)} rows in table - newest ${newest ? ago(newest) : "never"}`;
@@ -428,7 +484,7 @@ async function load() {
     if (r.truncated) $("#banners").insertAdjacentHTML("beforeend", '<div class="banner warn">Row cap reached: analytics cover only the newest rows in this range. Pick a shorter range for exact totals.</div>');
   } catch (e) {
     // A TypeError from fetch() means the request never reached a server.
-    health = { ok: false, unreachable: e instanceof TypeError, error: { message: e.message } };
+    health = { ok: false, unreachable: e instanceof TypeError, error: { message: e.message }, hint: e.hint };
     banners(); setHealthAge();
   }
 }
@@ -436,12 +492,12 @@ async function load() {
 $("#reload").onclick = load;
 $("#range").onchange = load;
 $("#userf").onchange = () => { renderAll(); paintLive(); };
-setInterval(() => { if ($("#auto").checked) load(); }, 30000);
+setInterval(() => { if ($("#auto").checked) load(); }, REFRESH_MS);
 setInterval(renderActive, 5000);
 showTab("live");
 renderLiveShell();
 load().then(pollLive);
-setInterval(pollLive, 2000);
+setInterval(pollLive, POLL_MS);
 </script>
 </body>
 </html>
