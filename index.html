@@ -67,9 +67,33 @@
   .dot { width:9px; height:9px; border-radius:50%; background:var(--accent); display:inline-block; box-shadow:0 0 0 0 #35d0a5aa; animation:pulse 1.6s infinite; }
   .dot.off { background:var(--muted); animation:none; }
   @keyframes pulse { 70% { box-shadow:0 0 0 8px #35d0a500; } 100% { box-shadow:0 0 0 0 #35d0a500; } }
+  /* Login gate (public site only). Covers everything; no data is requested until it is passed. */
+  #gate { position:fixed; inset:0; z-index:100; background:var(--bg); display:none; align-items:center; justify-content:center; padding:20px; }
+  #gate.show { display:flex; }
+  #gate form { width:min(360px,100%); background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:26px 24px; box-shadow:0 20px 60px #0009; }
+  #gate h2 { margin:0 0 4px; font-size:17px; } #gate p { margin:0 0 18px; color:var(--muted); }
+  #gate label { display:block; color:var(--muted); font-size:12px; margin:12px 0 4px; }
+  #gate input { width:100%; padding:9px 11px; font:inherit; color:var(--fg); background:var(--panel2); border:1px solid var(--line); border-radius:6px; }
+  #gate input:focus { outline:none; border-color:var(--accent); }
+  #gate button { width:100%; margin-top:18px; padding:10px; background:var(--accent); color:#04130e; border:0; font-weight:600; border-radius:6px; }
+  #gate button:disabled { opacity:.6; cursor:wait; }
+  #gate .err { color:var(--red); min-height:18px; margin-top:12px; font-size:12px; }
+  body.locked > header, body.locked > nav, body.locked > main, body.locked > #banners { display:none; }
 </style>
 </head>
-<body>
+<body class="locked">
+<div id="gate" role="dialog" aria-modal="true" aria-labelledby="gtitle">
+  <form id="gform" autocomplete="off">
+    <h2 id="gtitle">Monitoring Window</h2>
+    <p>Sign in to view Sales Dashboard activity.</p>
+    <label for="gid">ID</label>
+    <input id="gid" name="id" type="text" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+    <label for="gpw">Password</label>
+    <input id="gpw" name="password" type="password" autocomplete="current-password" required>
+    <div class="err" id="gerr" role="alert"></div>
+    <button type="submit" id="gbtn">Sign in</button>
+  </form>
+</div>
 <header>
   <h1>Sales Dashboard - Monitoring Window</h1>
   <span id="health" class="pill">connecting...</span>
@@ -85,6 +109,7 @@
   <label class="muted">User <select id="userf"><option value="">All users</option></select></label>
   <label class="chk"><input type="checkbox" id="auto" checked> auto-refresh</label>
   <button id="reload">Reload</button>
+  <button id="logout" style="display:none">Sign out</button>
 </header>
 <div id="banners"></div>
 <nav id="tabs"></nav>
@@ -489,15 +514,93 @@ async function load() {
   }
 }
 
-$("#reload").onclick = load;
-$("#range").onchange = load;
-$("#userf").onchange = () => { renderAll(); paintLive(); };
-setInterval(() => { if ($("#auto").checked) load(); }, REFRESH_MS);
-setInterval(renderActive, 5000);
-showTab("live");
-renderLiveShell();
-load().then(pollLive);
-setInterval(pollLive, POLL_MS);
+// ------------------------------------------------------------------- login
+// Public site only (local mode is private to this machine and is not gated).
+//
+// HONEST LIMITS: this is a gate on the PAGE. The data functions it calls stay
+// callable with the public anon key, so anyone who reads the code can fetch the
+// same (already sanitized) data without this page. What it does do: keep casual
+// visitors out, and request NOTHING from the database until sign-in succeeds.
+// The ID and password are not in the repo -- config.js holds only a salted
+// PBKDF2-SHA256 hash of both, so a leak of the repo does not hand them over
+// (it does allow offline guessing, which the 200k iterations slow down).
+const AUTH_KEY = "monitoring_auth_v1";
+const AUTH_TTL_MS = 8 * 60 * 60 * 1000; // sign in again after 8 hours
+const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+const unhex = (h) => new Uint8Array(h.match(/../g).map((x) => parseInt(x, 16)));
+
+async function derive(id, pw, a) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(id.trim().toLowerCase() + "\u0000" + pw), "PBKDF2", false, ["deriveBits"]);
+  return hex(await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt: unhex(a.salt), iterations: a.iterations }, key, 256));
+}
+// Constant-time compare of two equal-length hex strings.
+function sameHash(x, y) {
+  if (x.length !== y.length) return false;
+  let d = 0;
+  for (let i = 0; i < x.length; i++) d |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return d === 0;
+}
+// The stored token is bound to the CURRENT hash, so changing the password in
+// config.js signs everyone out, and a hand-made "ok" value cannot pass.
+function isAuthed() {
+  try {
+    const t = JSON.parse(localStorage.getItem(AUTH_KEY) || "null");
+    return !!t && t.h === CFG.auth.hash && Date.now() - t.at < AUTH_TTL_MS;
+  } catch { return false; }
+}
+function signOut() { try { localStorage.removeItem(AUTH_KEY); } catch {} location.reload(); }
+
+let booted = false;
+function boot() {
+  if (booted) return;
+  booted = true;
+  document.body.classList.remove("locked");
+  $("#gate").classList.remove("show");
+  if (PUBLIC_MODE) { $("#logout").style.display = ""; $("#logout").onclick = signOut; }
+  $("#reload").onclick = load;
+  $("#range").onchange = load;
+  $("#userf").onchange = () => { renderAll(); paintLive(); };
+  setInterval(() => { if ($("#auto").checked) load(); }, REFRESH_MS);
+  setInterval(renderActive, 5000);
+  showTab("live");
+  renderLiveShell();
+  load().then(pollLive);
+  setInterval(pollLive, POLL_MS);
+}
+
+let failures = 0;
+function showGate() {
+  document.body.classList.add("locked");
+  $("#gate").classList.add("show");
+  const err = (m) => { $("#gerr").textContent = m; };
+  if (!CFG.auth || !CFG.auth.hash || !CFG.auth.salt) { err("Sign-in is not configured. Contact the site owner."); $("#gform").querySelectorAll("input,button").forEach((e) => (e.disabled = true)); return; }
+  if (!(window.crypto && crypto.subtle)) { err("This browser cannot verify sign-in (needs HTTPS). Try a current browser."); $("#gform").querySelectorAll("input,button").forEach((e) => (e.disabled = true)); return; }
+  setTimeout(() => $("#gid").focus(), 50);
+  $("#gform").onsubmit = async (e) => {
+    e.preventDefault();
+    const btn = $("#gbtn");
+    btn.disabled = true; err("");
+    // Slow down repeated wrong guesses (client-side only; deters, does not prevent).
+    if (failures > 0) await new Promise((r) => setTimeout(r, Math.min(failures, 6) * 1000));
+    let ok = false;
+    try { ok = sameHash(await derive($("#gid").value, $("#gpw").value, CFG.auth), CFG.auth.hash); } catch { err("Sign-in failed. Please try again."); btn.disabled = false; return; }
+    if (ok) {
+      try { localStorage.setItem(AUTH_KEY, JSON.stringify({ h: CFG.auth.hash, at: Date.now() })); } catch {}
+      $("#gpw").value = "";
+      boot();
+    } else {
+      failures++;
+      err("Incorrect ID or password.");
+      $("#gpw").value = ""; $("#gpw").focus();
+      btn.disabled = false;
+    }
+  };
+}
+
+// Gate only the public site. Fail closed: a public build with no auth config
+// shows the (disabled) sign-in screen and never boots.
+if (PUBLIC_MODE && !isAuthedSafe()) showGate(); else boot();
+function isAuthedSafe() { return !!(CFG.auth && CFG.auth.hash) && isAuthed(); }
 </script>
 </body>
 </html>

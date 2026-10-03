@@ -30,6 +30,31 @@ Until it has been run, the site shows "backend is not set up yet".
 (every browser that opens the InLane app already receives it). Never put a
 service-role key in that file.
 
+## Sign-in on the public site
+
+The public site asks for an ID and password before it loads or requests anything.
+Neither is stored in this repo: `config.js` holds only a salted PBKDF2-SHA256
+hash (`auth`). Sessions last 8 hours or until "Sign out".
+
+**This is a gate on the page, not a security boundary.** With no database-side
+authentication, the `monitoring_feed_*` functions stay callable with the public
+anon key, so someone who reads the code can fetch the same sanitized data without
+the page. It keeps casual visitors out; it does not stop a determined one. For
+real access control, move the check into the database (Supabase Auth plus a policy
+or function that requires a logged-in user).
+
+To change the credentials, generate a new salt/hash and replace `auth` in
+`config.js`:
+
+```js
+const c = require("crypto");
+const salt = c.randomBytes(16), iterations = 200000;
+const hash = c.pbkdf2Sync(id.trim().toLowerCase() + "\u0000" + password, salt, iterations, 32, "sha256");
+console.log({ salt: salt.toString("hex"), iterations, hash: hash.toString("hex") });
+```
+
+Changing the hash signs everyone out. Local mode (`server.mjs`) is not gated.
+
 ## Local mode (full data)
 
 1. Copy `.env.example` to `.env` and set `SUPABASE_URL` and
