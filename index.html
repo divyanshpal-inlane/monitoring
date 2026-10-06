@@ -106,7 +106,7 @@
       <option value="30d">Last 30 days</option><option value="all">All time</option>
     </select>
   </label>
-  <label class="muted">User <select id="userf"><option value="">All users</option></select></label>
+  <label class="muted">Sales agent <select id="userf"><option value="">All agents</option></select></label>
   <label class="chk"><input type="checkbox" id="auto" checked> auto-refresh</label>
   <button id="reload">Reload</button>
   <button id="logout" style="display:none">Sign out</button>
@@ -156,6 +156,9 @@ const dt = (ts) => new Date(ts).toLocaleString([], { hour12: false, month: "shor
 const quantile = (sorted, q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : null);
 const inc = (m, k, by = 1) => m.set(k, (m.get(k) || 0) + by);
 const topN = (m, n = 10) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+// Course ids recorded on booking_created -> friendly English labels.
+const courseLabel = (c) => ({ demo: "Demo", course_4: "4-class", course_5: "5-class", course_6: "6-class", course_10: "10-class", course_15: "15-class", course_20: "20-class" }[c] || c || "?");
+const busiestDay = (m) => { let best = null; for (const [d, n] of m) if (!best || n > best[1]) best = [d, n]; return best; };
 
 let rows = [];            // analytics window, ascending by ts
 let names = {};           // instructor id -> name
@@ -235,7 +238,7 @@ const tag = (c) => `<span class="tag ${esc(c)}">${esc(c)}</span>`;
 function eventRow(r, cls = "") {
   return `<tr class="${cls}" title="${esc(JSON.stringify(r, null, 1))}"><td class="mono">${tm(r.ts)}</td><td>${esc(uname(r))}</td><td>${tag(r.category)}</td><td class="mono">${esc(r.event_name)}</td><td>${result(r)}</td><td>${detail(r)}</td></tr>`;
 }
-const eventTable = (list, cls) => `<table><thead><tr><th>Time</th><th>User</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, cls)).join("")}</tbody></table>`;
+const eventTable = (list, cls) => `<table><thead><tr><th>Time</th><th>Sales agent</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, cls)).join("")}</tbody></table>`;
 function bars(entries, cls = "", fmt = nf) {
   if (!entries.length) return '<div class="empty">no data</div>';
   const max = Math.max(...entries.map((e) => e[1]), 1);
@@ -252,7 +255,7 @@ function analyze(list) {
   A.hour = Array(24).fill(0); A.day = new Map();
   A.failReasons = new Map(); A.rejects = new Map(); A.created = [];
   const ev = (n) => list.filter((r) => r.event_name === n);
-  const userOf = (u) => { if (!A.users.has(u)) A.users.set(u, { u, sessions: new Set(), events: 0, actions: 0, api: 0, wall: 0, role: "", first: 0, active: 0, started: 0, created: 0, cancelled: 0, failed: 0, errors: 0, last: 0, instrs: new Set() }); return A.users.get(u); };
+  const userOf = (u) => { if (!A.users.has(u)) A.users.set(u, { u, sessions: new Set(), events: 0, actions: 0, api: 0, wall: 0, role: "", first: 0, active: 0, started: 0, created: 0, cancelled: 0, failed: 0, errors: 0, last: 0, instrs: new Set(), customers: new Set(), courses: new Map(), bookDays: new Map(), bookHours: new Map() }); return A.users.get(u); };
   for (const r of list) {
     const u = uname(r), U = userOf(u), t = new Date(r.ts).getTime();
     U.sessions.add(r.session_id); U.events++; U.last = Math.max(U.last, t);
@@ -260,6 +263,13 @@ function analyze(list) {
     if (r.category === "api") U.api++; else U.actions++;
     if (r.user_role && !U.role) U.role = r.user_role;
     if (r.instructor_id) U.instrs.add(r.instructor_id);
+    if (cust(r)) U.customers.add(cust(r));
+    if (r.event_name === "booking_created") {
+      const c = props(r).course;
+      if (c) inc(U.courses, c);
+      if (r.slot_date) inc(U.bookDays, String(r.slot_date).slice(0, 10));
+      if (r.slot_start) inc(U.bookHours, String(r.slot_start).slice(0, 2));
+    }
     inc(A.cats, r.category);
     if (r.category !== "api") inc(A.events, r.event_name);
     if (r.category === "user_action") { A.hour[new Date(r.ts).getHours()]++; inc(A.day, new Date(r.ts).toLocaleDateString()); }
@@ -344,85 +354,149 @@ function renderOverview(A) {
     </div>`;
 }
 
+let agentSort = "booked";
 function renderUsers(A) {
-  const list = [...A.users.values()].sort((a, b) => b.last - a.last);
-  $("#t-users").innerHTML = card("Users", list.length ? `<table><thead><tr><th>User</th><th class="num">Sessions</th><th class="num">Events</th><th class="num">Active time</th><th class="num">Started</th><th class="num">Created</th><th class="num">Cancelled</th><th class="num">Failed</th><th class="num">Errors</th><th>Last seen</th></tr></thead><tbody>${list.map((U) => `<tr><td><b>${esc(U.u)}</b></td><td class="num">${U.sessions.size}</td><td class="num">${nf(U.events)}</td><td class="num">${fmtDur(U.active)}</td><td class="num">${U.started}</td><td class="num ok">${U.created}</td><td class="num">${U.cancelled}</td><td class="num ${U.failed ? "fail" : ""}">${U.failed}</td><td class="num ${U.errors ? "fail" : ""}">${U.errors}</td><td>${dt(U.last)} <span class="muted">(${ago(U.last)})</span></td></tr>`).join("")}</tbody></table>` : '<div class="empty">no users in range</div>');
-}
-
-// Per-person summary: who is on the dashboard, how long they are on it, and
-// how much they booked. Screen time = sum of that user's session spans; active
-// time = what the tab itself reported through dashboard_closed (only sent when
-// a session closes, so it is the more trustworthy number and 0 for open tabs).
-let usSort = "booked";
-function renderUserSummary(A) {
   const list = [...A.users.values()];
+  const convRate = (U) => (U.started ? U.created / U.started : 0);
   const cmp = {
-    booked: (a, b) => b.created - a.created || b.wall - a.wall || b.events - a.events,
-    screen: (a, b) => b.wall - a.wall || b.events - a.events,
-    actions: (a, b) => b.actions - a.actions || b.events - a.events,
+    booked: (a, b) => b.created - a.created || b.customers.size - a.customers.size || b.events - a.events,
+    customers: (a, b) => b.customers.size - a.customers.size || b.created - a.created,
+    conversion: (a, b) => convRate(b) - convRate(a) || b.created - a.created,
+    time: (a, b) => b.active - a.active || b.events - a.events,
     last: (a, b) => b.last - a.last,
     name: (a, b) => a.u.localeCompare(b.u),
   };
-  list.sort(cmp[usSort] || cmp.booked);
+  list.sort(cmp[agentSort] || cmp.booked);
 
-  const T = { wall: 0, active: 0, actions: 0, api: 0, started: 0, created: 0, cancelled: 0, failed: 0, errors: 0 };
+  const T = list.reduce((s, U) => { s.created += U.created; s.started += U.started; s.cancelled += U.cancelled; s.customers += U.customers.size; return s; }, { created: 0, started: 0, cancelled: 0, customers: 0 });
   const cutoff = Date.now() - 5 * 60 * 1000;
   let online = 0;
-  for (const U of list) {
-    T.wall += U.wall; T.active += U.active;
-    T.actions += U.actions; T.api += U.api; T.started += U.started;
-    T.created += U.created; T.cancelled += U.cancelled; T.failed += U.failed; T.errors += U.errors;
-    if ((lastSeen.get(U.u) || U.last) >= cutoff) online++;
-  }
+  for (const U of list) if ((lastSeen.get(U.u) || U.last) >= cutoff) online++;
 
-  const sortOpts = [["booked", "Slots booked"], ["screen", "Screen time"], ["actions", "Activity"], ["last", "Last seen"], ["name", "Name"]]
-    .map(([k, l]) => `<option value="${k}" ${k === usSort ? "selected" : ""}>${l}</option>`).join("");
+  const sortOpts = [["booked", "Classes booked"], ["customers", "Customers"], ["conversion", "Conversion"], ["time", "Working time"], ["last", "Last seen"], ["name", "Name"]]
+    .map(([k, l]) => `<option value="${k}" ${k === agentSort ? "selected" : ""}>${l}</option>`).join("");
 
   const head = `<div class="kpis">
-    ${kpi("Users", nf(list.length), `${nf(online)} active in last 5 min`)}
-    ${kpi("Screen time", fmtDur(T.wall), "sum of session spans")}
-    ${kpi("Active time", fmtDur(T.active), "reported by closing tabs")}
-    ${kpi("Slots booked", nf(T.created), `${nf(T.started)} picked &middot; ${conv(T.created, T.started)}`)}
-    ${kpi("Sessions", nf(A.sessions.size), "browser tabs &middot; distinct, as on Overview")}
-    ${kpi("Actions / API", `${nf(T.actions)} / ${nf(T.api)}`)}
-    ${kpi("Cancelled / failed", `${nf(T.cancelled)} / ${nf(T.failed)}`)}
-    ${kpi("Errors", nf(T.errors))}
+    ${kpi("Sales agents", nf(list.length), `${nf(online)} active now`)}
+    ${kpi("Classes booked", nf(T.created), `${nf(T.started)} slots picked`)}
+    ${kpi("Customers", nf(T.customers))}
+    ${kpi("Conversion", conv(T.created, T.started), "booked / picked")}
+    ${kpi("Cancelled", nf(T.cancelled))}
   </div>`;
 
   const table = list.length ? `<table><thead><tr>
-      <th>User</th><th>Role</th><th class="num">Sessions</th>
-      <th class="num">Screen time</th><th class="num">Active time</th><th class="num">Actions</th>
-      <th class="num">API calls</th><th class="num">Slots picked</th><th class="num">Slots booked</th>
-      <th class="num">Cancelled</th><th class="num">Failed</th><th class="num">Errors</th>
-      <th class="num">Instructors</th><th>First seen</th><th>Last seen</th>
-    </tr></thead><tbody>${list.map((U) => `<tr>
-      <td><b>${esc(U.u)}</b></td>
-      <td>${U.role ? `<span class="tag session">${esc(U.role)}</span>` : '<span class="muted">-</span>'}</td>
-      <td class="num">${U.sessions.size}</td>
-      <td class="num">${fmtDur(U.wall)}</td>
+      <th>Sales agent</th><th class="num">Customers</th><th class="num">Classes booked</th>
+      <th class="num">Slots picked</th><th class="num">Conversion</th><th class="num">Avg classes / customer</th>
+      <th class="num">Cancelled</th><th class="num">Working time</th><th>Last seen</th>
+    </tr></thead><tbody>${list.map((U) => `<tr class="click agent-row" data-user="${esc(U.u)}">
+      <td><b>${esc(U.u)}</b>${U.role ? ` <span class="tag session">${esc(U.role)}</span>` : ""}</td>
+      <td class="num">${nf(U.customers.size)}</td>
+      <td class="num ok">${nf(U.created)}</td>
+      <td class="num">${nf(U.started)}</td>
+      <td class="num">${conv(U.created, U.started)}</td>
+      <td class="num">${U.customers.size ? (U.created / U.customers.size).toFixed(1) : "-"}</td>
+      <td class="num ${U.cancelled ? "fail" : ""}">${U.cancelled}</td>
       <td class="num">${U.active ? fmtDur(U.active) : '<span class="muted">-</span>'}</td>
-      <td class="num">${nf(U.actions)}</td>
-      <td class="num">${nf(U.api)}</td>
-      <td class="num">${U.started}</td>
-      <td class="num ok">${U.created}</td>
-      <td class="num">${U.cancelled}</td>
-      <td class="num ${U.failed ? "fail" : ""}">${U.failed}</td>
-      <td class="num ${U.errors ? "fail" : ""}">${U.errors}</td>
-      <td class="num">${U.instrs.size}</td>
-      <td class="muted">${U.first ? dt(U.first) : "-"}</td>
       <td>${dt(U.last)} <span class="muted">(${ago(U.last)})</span></td>
-    </tr>`).join("")}</tbody></table>` : '<div class="empty">no users in range</div>';
+    </tr>`).join("")}</tbody></table>` : '<div class="empty">no agents in range</div>';
 
-  $("#t-usersummary").innerHTML = `<div class="live-top"><label class="muted">Sort by <select id="ussort">${sortOpts}</select></label>
-    <span class="muted">${nf(list.length)} user(s) in range &middot; Range selector above applies here</span></div>`
-    + head + card("User summary", table);
+  $("#t-users").innerHTML = `<div class="live-top"><label class="muted">Sort by <select id="agentsort">${sortOpts}</select></label>
+    <span class="muted">${nf(list.length)} agent(s) in range &middot; Range selector above applies here &middot; Click a row to zoom into that agent (header filter)</span></div>`
+    + head + card("Sales agent leaderboard", table);
 
-  $("#ussort").onchange = (e) => { usSort = e.target.value; renderAll(); };
+  $("#agentsort").onchange = (e) => { agentSort = e.target.value; renderAll(); };
+  $("#t-users").querySelectorAll(".agent-row").forEach((tr) => tr.addEventListener("click", () => {
+    $("#userf").value = tr.dataset.user;
+    renderAll(); paintLive();
+  }));
+}
+
+let perfSort = "booked";
+function renderUserSummary(A) {
+  const cutoff = Date.now() - 5 * 60 * 1000;
+  const list = [...A.users.values()];
+  // Per-agent course mix from their booking_created rows.
+  for (const U of list) U.mix = [...U.courses.entries()].sort((a, b) => b[1] - a[1]);
+  const convRate = (U) => (U.started ? U.created / U.started : 0);
+  const cmp = {
+    booked: (a, b) => b.created - a.created || b.customers.size - a.customers.size || b.events - a.events,
+    customers: (a, b) => b.customers.size - a.customers.size || b.created - a.created,
+    slots: (a, b) => b.started - a.started || b.created - a.created,
+    conversion: (a, b) => convRate(b) - convRate(a) || b.created - a.created,
+    time: (a, b) => b.active - a.active || b.events - a.events,
+    last: (a, b) => b.last - a.last,
+    name: (a, b) => a.u.localeCompare(b.u),
+  };
+  list.sort(cmp[perfSort] || cmp.booked);
+
+  // Team totals + course mix.
+  const teamMix = new Map();
+  const T = { wall: 0, active: 0, started: 0, created: 0, cancelled: 0, failed: 0, customers: 0, instrs: 0, errors: 0 };
+  let online = 0;
+  for (const U of list) {
+    T.wall += U.wall; T.active += U.active; T.started += U.started;
+    T.created += U.created; T.cancelled += U.cancelled; T.failed += U.failed; T.errors += U.errors;
+    T.customers += U.customers.size; T.instrs += U.instrs.size;
+    for (const [c, n] of U.courses) inc(teamMix, c, n);
+    if ((lastSeen.get(U.u) || U.last) >= cutoff) online++;
+  }
+  const sortOpts = [["booked", "Classes booked"], ["customers", "Customers"], ["slots", "Slots picked"], ["conversion", "Conversion"], ["time", "Working time"], ["last", "Last seen"], ["name", "Name"]]
+    .map(([k, l]) => `<option value="${k}" ${k === perfSort ? "selected" : ""}>${l}</option>`).join("");
+
+  const mixBars = bars([...teamMix.entries()].map(([c, v]) => [courseLabel(c), v]));
+  const bd = ([d, n]) => `${new Date(d + "T00:00").toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })} <span class="muted">(${n})</span>`;
+
+  $("#t-usersummary").innerHTML = `<div class="live-top"><label class="muted">Sort by <select id="perfsort">${sortOpts}</select></label>
+    <span class="muted">${nf(list.length)} agent(s) in range &middot; Range selector above applies here</span></div>
+    <div class="kpis">
+      ${kpi("Agents", nf(list.length), `${nf(online)} active now`)}
+      ${kpi("Classes booked", nf(T.created), conv(T.created, T.started) + " conversion")}
+      ${kpi("Customers booked", nf(T.customers), "unique customer names")}
+      ${kpi("Slots picked", nf(T.started), "slot clicks that opened the form")}
+      ${kpi("Avg classes / customer", T.customers ? (T.created / T.customers).toFixed(1) : "-")}
+      ${kpi("Cancelled", nf(T.cancelled))}
+      ${kpi("Working time", fmtDur(T.active), "sum of active time")}
+      ${kpi("Dashboard open", fmtDur(T.wall), "sum of session spans")}
+    </div>
+    <div class="grid2">
+      ${card("Course mix (classes booked)", mixBars)}
+      ${card("Team KPIs — all in-range agents", `<table><thead><tr><th>Metric</th><th class="num">Total</th></tr></thead><tbody>
+        <tr><td>Instructors used</td><td class="num">${nf(T.instrs)}</td></tr>
+        <tr><td>Cancelled classes</td><td class="num">${nf(T.cancelled)}</td></tr>
+        <tr><td>Failed / rejected bookings</td><td class="num">${nf(T.failed)}</td></tr>
+        <tr><td>Errors on the dashboard</td><td class="num">${nf(T.errors)}</td></tr>
+      </tbody></table>`)}
+    </div>
+    ${card("Team performance by agent", list.length ? `<table><thead><tr>
+        <th>Sales agent</th><th class="num">Customers</th><th class="num">Classes booked</th>
+        <th class="num">Slots picked</th><th class="num">Conversion</th><th class="num">Avg classes / customer</th>
+        <th>Course mix</th><th class="num">Instructors</th><th class="num">Active time</th>
+        <th>Busiest day</th><th class="num">Cancelled</th><th>Last seen</th>
+      </tr></thead><tbody>${list.map((U) => `<tr class="click agent-row" data-user="${esc(U.u)}">
+        <td><b>${esc(U.u)}</b>${U.role ? ` <span class="tag session">${esc(U.role)}</span>` : ""}</td>
+        <td class="num">${nf(U.customers.size)}</td>
+        <td class="num ok">${nf(U.created)}</td>
+        <td class="num">${nf(U.started)}</td>
+        <td class="num">${conv(U.created, U.started)}</td>
+        <td class="num">${U.customers.size ? (U.created / U.customers.size).toFixed(1) : "-"}</td>
+        <td class="muted">${U.mix.length ? U.mix.slice(0, 4).map(([c, n]) => `${courseLabel(c)} ${nf(n)}`).join(" &middot; ") || "-" : "-"}</td>
+        <td class="num">${nf(U.instrs.size)}</td>
+        <td class="num">${U.active ? fmtDur(U.active) : '<span class="muted">-</span>'}</td>
+        <td>${U.bookDays.size ? bd(busiestDay(U.bookDays)) : '<span class="muted">-</span>'}</td>
+        <td class="num ${U.cancelled ? "fail" : ""}">${U.cancelled}</td>
+        <td>${dt(U.last)} <span class="muted">(${ago(U.last)})</span></td>
+      </tr>`).join("")}</tbody></table>` : '<div class="empty">no agents in range</div>')}`;
+
+  $("#perfsort").onchange = (e) => { perfSort = e.target.value; renderAll(); };
+  $("#t-usersummary").querySelectorAll(".agent-row").forEach((tr) => tr.addEventListener("click", () => {
+    $("#userf").value = tr.dataset.user;
+    renderAll(); paintLive();
+  }));
 }
 
 function renderSessions(A) {
   const list = [...A.sessions.values()].sort((a, b) => b.last - a.last).slice(0, 300);
-  $("#t-sessions").innerHTML = card(`Sessions (newest ${list.length}; click a row for its full timeline)`, list.length ? `<table><thead><tr><th>Started</th><th>User</th><th class="num">Wall</th><th class="num">Active</th><th class="num">Events</th><th class="num">Started</th><th class="num">Created</th><th class="num">Errors</th><th>Device</th></tr></thead><tbody>${list.map((S) => { const d = S.device || {}; return `<tr class="click" data-sid="${esc(S.id)}"><td>${dt(S.first)}</td><td>${esc(S.user)}</td><td class="num">${fmtDur(S.last - S.first)}</td><td class="num">${S.active != null ? fmtDur(S.active) : '<span class="muted">open</span>'}</td><td class="num">${S.n}</td><td class="num">${S.started}</td><td class="num ok">${S.created}</td><td class="num ${S.errors ? "fail" : ""}">${S.errors}</td><td class="muted">${esc([d.browser, d.os, d.screen].filter(Boolean).join(" / "))}</td></tr>`; }).join("")}</tbody></table>` : '<div class="empty">no sessions in range</div>');
+  $("#t-sessions").innerHTML = card(`Sessions (newest ${list.length}; click a row for its full timeline)`, list.length ? `<table><thead><tr><th>Started</th><th>Sales agent</th><th class="num">Wall</th><th class="num">Active</th><th class="num">Events</th><th class="num">Started</th><th class="num">Created</th><th class="num">Errors</th><th>Device</th></tr></thead><tbody>${list.map((S) => { const d = S.device || {}; return `<tr class="click" data-sid="${esc(S.id)}"><td>${dt(S.first)}</td><td>${esc(S.user)}</td><td class="num">${fmtDur(S.last - S.first)}</td><td class="num">${S.active != null ? fmtDur(S.active) : '<span class="muted">open</span>'}</td><td class="num">${S.n}</td><td class="num">${S.started}</td><td class="num ok">${S.created}</td><td class="num ${S.errors ? "fail" : ""}">${S.errors}</td><td class="muted">${esc([d.browser, d.os, d.screen].filter(Boolean).join(" / "))}</td></tr>`; }).join("")}</tbody></table>` : '<div class="empty">no sessions in range</div>');
   document.querySelectorAll("#t-sessions tr.click").forEach((tr) => (tr.onclick = () => openSession(tr.dataset.sid)));
 }
 
@@ -512,7 +586,7 @@ function renderLiveShell() {
 function paintLive(newIds = new Set()) {
   if (!$("#lbody")) return;
   const list = liveFiltered().slice().reverse().slice(0, 400);
-  $("#lbody").innerHTML = list.length ? `<table><thead><tr><th>Time</th><th>User</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, newIds.has(r) ? "new" : "")).join("")}</tbody></table>` : '<div class="empty">No matching events yet. Use the Sales Dashboard in another tab and they appear here within a few seconds.</div>';
+  $("#lbody").innerHTML = list.length ? `<table><thead><tr><th>Time</th><th>Sales agent</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, newIds.has(r) ? "new" : "")).join("")}</tbody></table>` : '<div class="empty">No matching events yet. Use the Sales Dashboard in another tab and they appear here within a few seconds.</div>';
   $("#ldot").className = "dot" + (livePaused ? " off" : "");
   $("#lstat").textContent = livePaused ? "paused" : "live";
   $("#lmeta").textContent = `${list.length} shown, ${liveNew} new since this page opened` + (liveChecked ? `, checked ${tm(liveChecked)}` : "");
@@ -552,7 +626,7 @@ function openSession(id) {
 $("#dclose").onclick = () => $("#drawer").classList.remove("open");
 
 // -------------------------------------------------------------------- load
-const TABS = [["live", "Live"], ["overview", "Overview"], ["users", "Users"], ["usersummary", "User summary"], ["sessions", "Sessions"], ["bookings", "Bookings"], ["customers", "Customers"], ["instructors", "Instructors"], ["api", "API health"], ["errors", "Errors"]];
+const TABS = [["live", "Live"], ["overview", "Overview"], ["users", "Sales agents"], ["usersummary", "Team performance"], ["sessions", "Sessions"], ["bookings", "Bookings"], ["customers", "Customers"], ["instructors", "Instructors"], ["api", "API health"], ["errors", "Errors"]];
 let tab = "live";
 function showTab(t) {
   tab = t;
@@ -605,7 +679,7 @@ async function load() {
     rows.forEach(noteSeen);
     const cur = $("#userf").value;
     const users = [...new Set(rows.map(uname))].sort();
-    $("#userf").innerHTML = '<option value="">All users</option>' + users.map((u) => `<option ${u === cur ? "selected" : ""}>${esc(u)}</option>`).join("");
+    $("#userf").innerHTML = '<option value="">All agents</option>' + users.map((u) => `<option ${u === cur ? "selected" : ""}>${esc(u)}</option>`).join("");
     banners(); setHealthAge(); renderActive(); renderAll();
     if (r.truncated) $("#banners").insertAdjacentHTML("beforeend", '<div class="banner warn">Row cap reached: analytics cover only the newest rows in this range. Pick a shorter range for exact totals.</div>');
   } catch (e) {
