@@ -67,6 +67,10 @@
   .dot { width:9px; height:9px; border-radius:50%; background:var(--accent); display:inline-block; box-shadow:0 0 0 0 #35d0a5aa; animation:pulse 1.6s infinite; }
   .dot.off { background:var(--muted); animation:none; }
   @keyframes pulse { 70% { box-shadow:0 0 0 8px #35d0a500; } 100% { box-shadow:0 0 0 0 #35d0a500; } }
+  #reload { min-width:92px; display:inline-flex; align-items:center; justify-content:center; gap:7px; }
+  #reload[disabled] { opacity:.55; cursor:wait; }
+  #reload.spin::before { content:""; width:11px; height:11px; border:2px solid var(--muted); border-top-color:var(--accent); border-radius:50%; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
   /* Login gate (public site only). Covers everything; no data is requested until it is passed. */
   #gate { position:fixed; inset:0; z-index:100; background:var(--bg); display:none; align-items:center; justify-content:center; padding:20px; }
   #gate.show { display:flex; }
@@ -746,13 +750,24 @@ function isAuthed() {
 function signOut() { try { localStorage.removeItem(AUTH_KEY); } catch {} location.reload(); }
 
 let booted = false;
+function setReloading(on) {
+  const b = $("#reload");
+  if (!b) return;
+  b.disabled = on;
+  b.classList.toggle("spin", on);
+  b.textContent = on ? "Reloading…" : "Reload";
+}
 function boot() {
   if (booted) return;
   booted = true;
   document.body.classList.remove("locked");
   $("#gate").classList.remove("show");
   if (PUBLIC_MODE) { $("#logout").style.display = ""; $("#logout").onclick = signOut; }
-  $("#reload").onclick = () => load({ refreshLive: true });
+  $("#reload").onclick = () => {
+    if ($("#reload").disabled) return;
+    setReloading(true);
+    load({ refreshLive: true }).finally(() => setReloading(false));
+  };
   $("#range").onchange = () => load({ refreshLive: true });
   $("#userf").onchange = () => { renderAll(); paintLive(); };
   setInterval(() => { if ($("#auto").checked) load(); }, REFRESH_MS);
