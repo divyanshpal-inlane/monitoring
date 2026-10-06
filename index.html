@@ -151,7 +151,7 @@ const fmtDur = (ms) => {
   return Math.floor(m / 60) + "h " + (m % 60) + "m";
 };
 const ago = (ts) => fmtDur(Date.now() - new Date(ts).getTime()) + " ago";
-const tm = (ts) => new Date(ts).toLocaleTimeString([], { hour12: false });
+const tm = (ts) => new Date(ts).toLocaleString(undefined, { hour12: false, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const dt = (ts) => new Date(ts).toLocaleString([], { hour12: false, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const quantile = (sorted, q) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] : null);
 const inc = (m, k, by = 1) => m.set(k, (m.get(k) || 0) + by);
@@ -238,7 +238,7 @@ const tag = (c) => `<span class="tag ${esc(c)}">${esc(c)}</span>`;
 function eventRow(r, cls = "") {
   return `<tr class="${cls}" title="${esc(JSON.stringify(r, null, 1))}"><td class="mono">${tm(r.ts)}</td><td>${esc(uname(r))}</td><td>${tag(r.category)}</td><td class="mono">${esc(r.event_name)}</td><td>${result(r)}</td><td>${detail(r)}</td></tr>`;
 }
-const eventTable = (list, cls) => `<table><thead><tr><th>Time</th><th>Sales agent</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, cls)).join("")}</tbody></table>`;
+const eventTable = (list, cls) => `<table><thead><tr><th>When</th><th>Sales agent</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, cls)).join("")}</tbody></table>`;
 function bars(entries, cls = "", fmt = nf) {
   if (!entries.length) return '<div class="empty">no data</div>';
   const max = Math.max(...entries.map((e) => e[1]), 1);
@@ -567,9 +567,22 @@ function renderActive() {
   el.textContent = act.length ? "active now: " + act.map(([u, t]) => `${u} (${fmtDur(now - t)})`).join(", ") : "active now: nobody (last 5 min)";
   el.className = "pill " + (act.length ? "ok" : "");
 }
+// The analytics Range selector also bounds the live feed: entries older than
+// the window are hidden, and "all" shows everything the feed has kept.
+function liveSinceMs() {
+  const v = $("#range") && $("#range").value;
+  const ms = { "1h": 36e5, "6h": 6 * 36e5, "24h": 24 * 36e5, "7d": 7 * 864e5, "30d": 30 * 864e5 }[v];
+  return ms == null ? Infinity : ms;
+}
+function rangeLabel() {
+  const el = $("#range");
+  if (!el || !el.selectedOptions || !el.selectedOptions[0]) return "all time";
+  return el.selectedOptions[0].textContent.trim();
+}
 function liveFiltered() {
   const u = $("#userf").value, cat = $("#lcat") ? $("#lcat").value : "", q = $("#lq") ? $("#lq").value.toLowerCase() : "";
-  return liveRows.filter((r) => (!u || uname(r) === u) && (!cat || (cat === "noapi" ? r.category !== "api" : r.category === cat)) && (!q || JSON.stringify(r).toLowerCase().includes(q)));
+  const since = Date.now() - liveSinceMs();
+  return liveRows.filter((r) => (!u || uname(r) === u) && (!cat || (cat === "noapi" ? r.category !== "api" : r.category === cat)) && (!q || JSON.stringify(r).toLowerCase().includes(q)) && new Date(r.received_at || r.ts).getTime() >= since);
 }
 function renderLiveShell() {
   $("#t-live").innerHTML = `<div class="live-top"><span class="dot" id="ldot"></span><b id="lstat">live</b>
@@ -586,10 +599,10 @@ function renderLiveShell() {
 function paintLive(newIds = new Set()) {
   if (!$("#lbody")) return;
   const list = liveFiltered().slice().reverse().slice(0, 400);
-  $("#lbody").innerHTML = list.length ? `<table><thead><tr><th>Time</th><th>Sales agent</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, newIds.has(r) ? "new" : "")).join("")}</tbody></table>` : '<div class="empty">No matching events yet. Use the Sales Dashboard in another tab and they appear here within a few seconds.</div>';
+  $("#lbody").innerHTML = list.length ? `<table><thead><tr><th>When</th><th>Sales agent</th><th>Type</th><th>Event</th><th>Result</th><th>Details</th></tr></thead><tbody>${list.map((r) => eventRow(r, newIds.has(r) ? "new" : "")).join("")}</tbody></table>` : '<div class="empty">No matching events yet. Use the Sales Dashboard in another tab and they appear here within a few seconds.</div>';
   $("#ldot").className = "dot" + (livePaused ? " off" : "");
   $("#lstat").textContent = livePaused ? "paused" : "live";
-  $("#lmeta").textContent = `${list.length} shown, ${liveNew} new since this page opened` + (liveChecked ? `, checked ${tm(liveChecked)}` : "");
+  $("#lmeta").textContent = `${list.length} shown, ${liveNew} new since this page opened` + (liveChecked ? `, checked ${tm(liveChecked)}` : "") + `, range: ${rangeLabel()}`;
 }
 async function pollLive() {
   if (livePaused) return;
@@ -670,7 +683,7 @@ function renderAll() {
   const A = analyze(u ? rows.filter((r) => uname(r) === u) : rows);
   renderOverview(A); renderUsers(A); renderUserSummary(A); renderSessions(A); renderBookings(A); renderCustomers(A); renderInstructors(A); renderApi(A); renderErrors(A);
 }
-async function load() {
+async function load(opts = {}) {
   try {
     const since = sinceIso();
     const [h, r, n] = await Promise.all([api("/api/health"), api("/api/rows" + (since ? "?since=" + encodeURIComponent(since) : "")), api("/api/instructors").catch(() => ({}))]);
@@ -682,6 +695,13 @@ async function load() {
     $("#userf").innerHTML = '<option value="">All agents</option>' + users.map((u) => `<option ${u === cur ? "selected" : ""}>${esc(u)}</option>`).join("");
     banners(); setHealthAge(); renderActive(); renderAll();
     if (r.truncated) $("#banners").insertAdjacentHTML("beforeend", '<div class="banner warn">Row cap reached: analytics cover only the newest rows in this range. Pick a shorter range for exact totals.</div>');
+    if (opts.refreshLive) {
+      // Manual Reload / range change: also restart the live feed so both feel
+      // responsive on whatever tab is showing. Auto-refresh (setInterval) does
+      // not do this -- it would wipe the tail every minute.
+      liveRows = []; liveCursor = null; liveSeen.clear(); liveNew = 0;
+      pollLive();
+    }
   } catch (e) {
     // A TypeError from fetch() means the request never reached a server.
     health = { ok: false, unreachable: e instanceof TypeError, error: { message: e.message }, hint: e.hint };
@@ -732,8 +752,8 @@ function boot() {
   document.body.classList.remove("locked");
   $("#gate").classList.remove("show");
   if (PUBLIC_MODE) { $("#logout").style.display = ""; $("#logout").onclick = signOut; }
-  $("#reload").onclick = load;
-  $("#range").onchange = load;
+  $("#reload").onclick = () => load({ refreshLive: true });
+  $("#range").onchange = () => load({ refreshLive: true });
   $("#userf").onchange = () => { renderAll(); paintLive(); };
   setInterval(() => { if ($("#auto").checked) load(); }, REFRESH_MS);
   setInterval(renderActive, 5000);
