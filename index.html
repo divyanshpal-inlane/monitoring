@@ -115,6 +115,7 @@
 <nav id="tabs"></nav>
 <main>
   <section id="t-live"></section><section id="t-overview"></section><section id="t-users"></section>
+  <section id="t-usersummary"></section>
   <section id="t-sessions"></section><section id="t-bookings"></section><section id="t-customers"></section>
   <section id="t-instructors"></section><section id="t-api"></section><section id="t-errors"></section>
 </main>
@@ -125,6 +126,17 @@
 // ------------------------------------------------------------------ helpers
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+// Errors reach this page as strings, plain objects or serialized Error values.
+// Stringifying an object directly renders "[object Object]", so walk the usual
+// fields first and only then fall back to JSON (never to String(object)).
+const errText = (e) => {
+  if (e == null || e === "") return "";
+  if (typeof e === "string") return e;
+  if (typeof e !== "object") return String(e);
+  const m = e.message ?? e.error ?? e.hint ?? e.detail ?? e.code;
+  if (typeof m === "string" && m) return m;
+  try { const j = JSON.stringify(e); return j && j !== "{}" ? j : ""; } catch { return ""; }
+};
 const nf = (n) => Number(n || 0).toLocaleString();
 const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 + "%" : "-");
 // created can exceed started (a booking may create several classes, or a flow
@@ -173,7 +185,10 @@ async function rpc(fn, args) {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     const notSetUp = j?.code === "PGRST202" || r.status === 404;
-    throw Object.assign(new Error(j?.message || r.statusText), {
+    // HTTP/2 has no reason phrase, so r.statusText is often "" -- without the
+    // status fallback Error.message becomes empty and every caller that prints
+    // it falls back to the raw object, i.e. "[object Object]".
+    throw Object.assign(new Error(errText(j?.message) || errText(j) || r.statusText || `HTTP ${r.status}`), {
       body: j,
       notSetUp,
       hint: notSetUp ? "The monitoring backend is not set up yet: the site owner needs to run setup.sql once in the Supabase SQL editor." : undefined,
@@ -197,7 +212,7 @@ async function api(path) {
   }
   const r = await fetch(path);
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(j?.error?.message || j?.error || r.statusText), { body: j });
+  if (!r.ok) throw Object.assign(new Error(errText(j?.error) || r.statusText || `HTTP ${r.status}`), { body: j });
   return j;
 }
 
@@ -237,10 +252,14 @@ function analyze(list) {
   A.hour = Array(24).fill(0); A.day = new Map();
   A.failReasons = new Map(); A.rejects = new Map(); A.created = [];
   const ev = (n) => list.filter((r) => r.event_name === n);
-  const userOf = (u) => { if (!A.users.has(u)) A.users.set(u, { u, sessions: new Set(), events: 0, active: 0, started: 0, created: 0, cancelled: 0, failed: 0, errors: 0, last: 0 }); return A.users.get(u); };
+  const userOf = (u) => { if (!A.users.has(u)) A.users.set(u, { u, sessions: new Set(), events: 0, actions: 0, api: 0, wall: 0, role: "", first: 0, active: 0, started: 0, created: 0, cancelled: 0, failed: 0, errors: 0, last: 0, instrs: new Set() }); return A.users.get(u); };
   for (const r of list) {
     const u = uname(r), U = userOf(u), t = new Date(r.ts).getTime();
     U.sessions.add(r.session_id); U.events++; U.last = Math.max(U.last, t);
+    U.first = U.first ? Math.min(U.first, t) : t;
+    if (r.category === "api") U.api++; else U.actions++;
+    if (r.user_role && !U.role) U.role = r.user_role;
+    if (r.instructor_id) U.instrs.add(r.instructor_id);
     inc(A.cats, r.category);
     if (r.category !== "api") inc(A.events, r.event_name);
     if (r.category === "user_action") { A.hour[new Date(r.ts).getHours()]++; inc(A.day, new Date(r.ts).toLocaleDateString()); }
@@ -283,7 +302,15 @@ function analyze(list) {
     if (r.event_name === "booking_created") A.created.push(r);
   }
   for (const U of A.users.values()) { U.active = 0; }
-  for (const S of A.sessions.values()) { const U = A.users.get(S.user); if (U && S.active != null) U.active += S.active; }
+  // Screen time is the sum of each of the user's session spans (first..last
+  // event of every tab they opened). Active time only exists for sessions that
+  // sent dashboard_closed, so an open tab contributes wall time but not active.
+  for (const S of A.sessions.values()) {
+    const U = A.users.get(S.user);
+    if (!U) continue;
+    if (S.last > S.first) U.wall += S.last - S.first;
+    if (S.active != null) U.active += S.active;
+  }
   A.n = (name) => ev(name).length;
   return A;
 }
@@ -320,6 +347,77 @@ function renderOverview(A) {
 function renderUsers(A) {
   const list = [...A.users.values()].sort((a, b) => b.last - a.last);
   $("#t-users").innerHTML = card("Users", list.length ? `<table><thead><tr><th>User</th><th class="num">Sessions</th><th class="num">Events</th><th class="num">Active time</th><th class="num">Started</th><th class="num">Created</th><th class="num">Cancelled</th><th class="num">Failed</th><th class="num">Errors</th><th>Last seen</th></tr></thead><tbody>${list.map((U) => `<tr><td><b>${esc(U.u)}</b></td><td class="num">${U.sessions.size}</td><td class="num">${nf(U.events)}</td><td class="num">${fmtDur(U.active)}</td><td class="num">${U.started}</td><td class="num ok">${U.created}</td><td class="num">${U.cancelled}</td><td class="num ${U.failed ? "fail" : ""}">${U.failed}</td><td class="num ${U.errors ? "fail" : ""}">${U.errors}</td><td>${dt(U.last)} <span class="muted">(${ago(U.last)})</span></td></tr>`).join("")}</tbody></table>` : '<div class="empty">no users in range</div>');
+}
+
+// Per-person summary: who is on the dashboard, how long they are on it, and
+// how much they booked. Screen time = sum of that user's session spans; active
+// time = what the tab itself reported through dashboard_closed (only sent when
+// a session closes, so it is the more trustworthy number and 0 for open tabs).
+let usSort = "booked";
+function renderUserSummary(A) {
+  const list = [...A.users.values()];
+  const cmp = {
+    booked: (a, b) => b.created - a.created || b.wall - a.wall || b.events - a.events,
+    screen: (a, b) => b.wall - a.wall || b.events - a.events,
+    actions: (a, b) => b.actions - a.actions || b.events - a.events,
+    last: (a, b) => b.last - a.last,
+    name: (a, b) => a.u.localeCompare(b.u),
+  };
+  list.sort(cmp[usSort] || cmp.booked);
+
+  const T = { wall: 0, active: 0, actions: 0, api: 0, started: 0, created: 0, cancelled: 0, failed: 0, errors: 0 };
+  const cutoff = Date.now() - 5 * 60 * 1000;
+  let online = 0;
+  for (const U of list) {
+    T.wall += U.wall; T.active += U.active;
+    T.actions += U.actions; T.api += U.api; T.started += U.started;
+    T.created += U.created; T.cancelled += U.cancelled; T.failed += U.failed; T.errors += U.errors;
+    if ((lastSeen.get(U.u) || U.last) >= cutoff) online++;
+  }
+
+  const sortOpts = [["booked", "Slots booked"], ["screen", "Screen time"], ["actions", "Activity"], ["last", "Last seen"], ["name", "Name"]]
+    .map(([k, l]) => `<option value="${k}" ${k === usSort ? "selected" : ""}>${l}</option>`).join("");
+
+  const head = `<div class="kpis">
+    ${kpi("Users", nf(list.length), `${nf(online)} active in last 5 min`)}
+    ${kpi("Screen time", fmtDur(T.wall), "sum of session spans")}
+    ${kpi("Active time", fmtDur(T.active), "reported by closing tabs")}
+    ${kpi("Slots booked", nf(T.created), `${nf(T.started)} picked &middot; ${conv(T.created, T.started)}`)}
+    ${kpi("Sessions", nf(A.sessions.size), "browser tabs &middot; distinct, as on Overview")}
+    ${kpi("Actions / API", `${nf(T.actions)} / ${nf(T.api)}`)}
+    ${kpi("Cancelled / failed", `${nf(T.cancelled)} / ${nf(T.failed)}`)}
+    ${kpi("Errors", nf(T.errors))}
+  </div>`;
+
+  const table = list.length ? `<table><thead><tr>
+      <th>User</th><th>Role</th><th class="num">Sessions</th>
+      <th class="num">Screen time</th><th class="num">Active time</th><th class="num">Actions</th>
+      <th class="num">API calls</th><th class="num">Slots picked</th><th class="num">Slots booked</th>
+      <th class="num">Cancelled</th><th class="num">Failed</th><th class="num">Errors</th>
+      <th class="num">Instructors</th><th>First seen</th><th>Last seen</th>
+    </tr></thead><tbody>${list.map((U) => `<tr>
+      <td><b>${esc(U.u)}</b></td>
+      <td>${U.role ? `<span class="tag session">${esc(U.role)}</span>` : '<span class="muted">-</span>'}</td>
+      <td class="num">${U.sessions.size}</td>
+      <td class="num">${fmtDur(U.wall)}</td>
+      <td class="num">${U.active ? fmtDur(U.active) : '<span class="muted">-</span>'}</td>
+      <td class="num">${nf(U.actions)}</td>
+      <td class="num">${nf(U.api)}</td>
+      <td class="num">${U.started}</td>
+      <td class="num ok">${U.created}</td>
+      <td class="num">${U.cancelled}</td>
+      <td class="num ${U.failed ? "fail" : ""}">${U.failed}</td>
+      <td class="num ${U.errors ? "fail" : ""}">${U.errors}</td>
+      <td class="num">${U.instrs.size}</td>
+      <td class="muted">${U.first ? dt(U.first) : "-"}</td>
+      <td>${dt(U.last)} <span class="muted">(${ago(U.last)})</span></td>
+    </tr>`).join("")}</tbody></table>` : '<div class="empty">no users in range</div>';
+
+  $("#t-usersummary").innerHTML = `<div class="live-top"><label class="muted">Sort by <select id="ussort">${sortOpts}</select></label>
+    <span class="muted">${nf(list.length)} user(s) in range &middot; Range selector above applies here</span></div>`
+    + head + card("User summary", table);
+
+  $("#ussort").onchange = (e) => { usSort = e.target.value; renderAll(); };
 }
 
 function renderSessions(A) {
@@ -454,7 +552,7 @@ function openSession(id) {
 $("#dclose").onclick = () => $("#drawer").classList.remove("open");
 
 // -------------------------------------------------------------------- load
-const TABS = [["live", "Live"], ["overview", "Overview"], ["users", "Users"], ["sessions", "Sessions"], ["bookings", "Bookings"], ["customers", "Customers"], ["instructors", "Instructors"], ["api", "API health"], ["errors", "Errors"]];
+const TABS = [["live", "Live"], ["overview", "Overview"], ["users", "Users"], ["usersummary", "User summary"], ["sessions", "Sessions"], ["bookings", "Bookings"], ["customers", "Customers"], ["instructors", "Instructors"], ["api", "API health"], ["errors", "Errors"]];
 let tab = "live";
 function showTab(t) {
   tab = t;
@@ -472,7 +570,10 @@ function banners() {
     const fromFile = location.protocol === "file:";
     b.push(`<div class="banner bad"><b>Cannot reach the local monitoring server.</b> ${fromFile ? "You opened the .html file directly, which cannot talk to the server." : "The server is not running (or was stopped)."}<br>
       Start it by double-clicking <code>start-monitor.cmd</code> in the monitoring-window folder (or run <code>node server.mjs</code> there), then open <a href="http://127.0.0.1:4455/" style="color:inherit"><code>http://127.0.0.1:4455/</code></a>.</div>`);
-  } else if (health && !health.ok) b.push(`<div class="banner bad"><b>Cannot read the logs table.</b> ${esc(health.error?.message || health.error || "")} ${health.hint ? "<br>" + esc(health.hint) : ""}</div>`);
+  } else if (health && !health.ok) {
+    const msg = [errText(health.error), errText(health.body), health.status ? `HTTP ${health.status}` : ""].filter(Boolean).map(esc).join(" \u00b7 ");
+    b.push(`<div class="banner bad"><b>Cannot read the logs table.</b> ${msg || esc("The database refused the read.")}${health.hint ? "<br>" + esc(health.hint) : ""}</div>`);
+  }
   $("#banners").innerHTML = b.join("");
 }
 function setHealthAge() {
@@ -493,7 +594,7 @@ function sinceIso() {
 function renderAll() {
   const u = $("#userf").value;
   const A = analyze(u ? rows.filter((r) => uname(r) === u) : rows);
-  renderOverview(A); renderUsers(A); renderSessions(A); renderBookings(A); renderCustomers(A); renderInstructors(A); renderApi(A); renderErrors(A);
+  renderOverview(A); renderUsers(A); renderUserSummary(A); renderSessions(A); renderBookings(A); renderCustomers(A); renderInstructors(A); renderApi(A); renderErrors(A);
 }
 async function load() {
   try {

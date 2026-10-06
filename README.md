@@ -1,7 +1,8 @@
 # Sales Dashboard - Monitoring Window
 
 Analytics for everyone using the Sales Dashboard, read from the
-`sales_dashboard_temporary_logs` table: live feed, users, sessions (with a
+`sales_dashboard_temporary_logs` table: live feed, users, a per-user summary
+(screen time, slots booked, cancellations, per role), sessions (with a
 per-session timeline), bookings funnel, instructors, API health and errors.
 
 It runs in two modes from the same `index.html`:
